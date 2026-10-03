@@ -1,0 +1,90 @@
+name: Build and release
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'electron/**'
+      - 'src/**'
+      - 'build/**'
+      - 'index.html'
+      - 'package*.json'
+      - 'vite.config.js'
+      - '.github/workflows/release.yml'
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node node_modules/electron/install.js
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:desktop
+        if: runner.os == 'Windows'
+      - run: npx electron-builder --win nsis portable --x64 --publish never
+        if: runner.os == 'Windows'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: npx electron-builder --mac --publish never
+        if: runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: npx electron-builder --linux --publish never
+        if: runner.os == 'Linux'
+      - run: npm run test:packaged
+        if: runner.os == 'Windows'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Akis-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+  release:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: version
+        run: echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Akış ${{ steps.version.outputs.tag }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            Akış — otomatik kaydeden, odaklı Markdown yazı uygulaması.
+            Windows için setup (kurulum) veya portable (kurulumsuz) dosyasını seçin.
+            macOS için DMG, Linux için AppImage veya DEB paketlerini kullanın.
+            Bu ilk sürümde paketler imzasızdır.
+          files: artifacts/*
+
